@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>GPTMail Clone</title>
+    <style>
+        :root { color-scheme: dark; }
+        body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0b1020; color: #e5e7eb; }
+        .wrap { max-width: 920px; margin: 0 auto; padding: 32px 20px 80px; }
+        .card { background: #121a31; border: 1px solid #24304f; border-radius: 16px; padding: 24px; margin-bottom: 20px; box-shadow: 0 12px 32px rgba(0,0,0,.25); }
+        h1,h2 { margin-top: 0; }
+        .muted { color: #94a3b8; }
+        input, button { border-radius: 12px; border: 1px solid #334155; padding: 12px 14px; font-size: 16px; }
+        input { width: 100%; box-sizing: border-box; background: #0f172a; color: #fff; }
+        button { background: #2563eb; color: #fff; cursor: pointer; }
+        button.secondary { background: transparent; }
+        .grid { display: grid; gap: 12px; }
+        .two { grid-template-columns: 1fr 180px; }
+        .row { display: flex; gap: 12px; flex-wrap: wrap; }
+        .pill { display: inline-block; padding: 6px 10px; background: #0f172a; border-radius: 999px; border: 1px solid #334155; }
+        code { background: #0f172a; border-radius: 6px; padding: 2px 6px; }
+        .status { min-height: 24px; color: #93c5fd; }
+        a { color: #93c5fd; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="card">
+        <h1>Rust Catch-All 临时邮箱</h1>
+        <p class="muted">兼容 GPTMail 核心 API，当前域名：<span class="pill">{{ mail_domain }}</span></p>
+    </div>
+
+    <div class="card">
+        <h2>1. 保存 API Key</h2>
+        <div class="grid">
+            <input id="apiKey" placeholder="输入 API Key，例如 gpt-test">
+            <div class="row">
+                <button id="saveKeyBtn">保存到浏览器</button>
+                <button class="secondary" id="clearKeyBtn">清除</button>
+            </div>
+            <div id="apiKeyStatus" class="status"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>2. 生成邮箱</h2>
+        <div class="grid two">
+            <input id="prefix" placeholder="自定义前缀，可留空随机生成">
+            <button id="generateBtn">生成</button>
+        </div>
+        <div id="generateStatus" class="status"></div>
+        <div id="generatedResult" class="muted"></div>
+    </div>
+
+    <div class="card">
+        <h2>3. 直接打开收件箱</h2>
+        <div class="grid two">
+            <input id="inboxEmail" placeholder="输入完整邮箱，例如 demo@{{ mail_domain }}">
+            <button id="openInboxBtn">打开</button>
+        </div>
+        <p class="muted">因为是 catch-all，只要域名可用，你也可以直接在本地拼出邮箱地址再查收件箱。</p>
+    </div>
+</div>
+<div id="templateData" data-domain="{{ mail_domain }}"></div>
+<script>
+const storageKey = 'gptmail_api_key';
+const domain = document.getElementById('templateData').dataset.domain;
+
+function getApiKey() { return localStorage.getItem(storageKey) || ''; }
+function setStatus(id, text) { document.getElementById(id).textContent = text || ''; }
+function encodedInboxPath(email) { return '/' + encodeURIComponent(email); }
+
+const apiKeyInput = document.getElementById('apiKey');
+apiKeyInput.value = getApiKey();
+setStatus('apiKeyStatus', getApiKey() ? '已读取浏览器中保存的 API Key。' : '尚未保存 API Key。');
+
+document.getElementById('saveKeyBtn').addEventListener('click', () => {
+    localStorage.setItem(storageKey, apiKeyInput.value.trim());
+    setStatus('apiKeyStatus', '已保存。');
+});
+
+document.getElementById('clearKeyBtn').addEventListener('click', () => {
+    localStorage.removeItem(storageKey);
+    apiKeyInput.value = '';
+    setStatus('apiKeyStatus', '已清除。');
+});
+
+document.getElementById('generateBtn').addEventListener('click', async () => {
+    const key = getApiKey();
+    if (!key) {
+        setStatus('generateStatus', '请先保存 API Key。');
+        return;
+    }
+
+    setStatus('generateStatus', '生成中...');
+    const prefix = document.getElementById('prefix').value.trim();
+    const response = await fetch('/api/generate-email', {
+        method: prefix ? 'POST' : 'GET',
+        headers: {
+            'X-API-Key': key,
+            ...(prefix ? { 'Content-Type': 'application/json' } : {}),
+        },
+        body: prefix ? JSON.stringify({ prefix, domain }) : undefined,
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.success) {
+        setStatus('generateStatus', payload.error || '生成失败');
+        return;
+    }
+
+    const email = payload.data.email;
+    const inboxHref = encodedInboxPath(email);
+    document.getElementById('generatedResult').innerHTML = `邮箱：<code>${email}</code> · <a href="${inboxHref}">打开收件箱</a>`;
+    document.getElementById('inboxEmail').value = email;
+    setStatus('generateStatus', `已生成，今日已用 ${payload.usage.used_today} 次。`);
+});
+
+document.getElementById('openInboxBtn').addEventListener('click', () => {
+    const email = document.getElementById('inboxEmail').value.trim();
+    if (!email) return;
+    window.location.href = encodedInboxPath(email);
+});
+</script>
+</body>
+</html>

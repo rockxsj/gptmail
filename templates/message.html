@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>邮件详情</title>
+    <style>
+        :root { color-scheme: dark; }
+        body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0b1020; color: #e5e7eb; }
+        .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; }
+        .card { background: #121a31; border: 1px solid #24304f; border-radius: 16px; padding: 20px; margin-bottom: 20px; }
+        a { color: #93c5fd; }
+        pre { white-space: pre-wrap; background: #0f172a; border-radius: 12px; padding: 16px; overflow-x: auto; }
+        iframe { width: 100%; min-height: 320px; border: 1px solid #334155; border-radius: 12px; background: white; }
+        .muted { color: #94a3b8; }
+        .status { min-height: 24px; color: #93c5fd; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="card">
+        <div><a href="/{{ email }}">← 返回收件箱</a></div>
+        <h1 id="subject">加载中...</h1>
+        <div class="muted" id="meta"></div>
+        <div class="status" id="status"></div>
+    </div>
+
+    <div class="card">
+        <h2>纯文本</h2>
+        <pre id="textContent">加载中...</pre>
+    </div>
+
+    <div class="card">
+        <h2>HTML</h2>
+        <iframe id="htmlFrame" sandbox="allow-same-origin"></iframe>
+    </div>
+
+    <div class="card">
+        <h2>原始头部</h2>
+        <pre id="rawHeaders"></pre>
+    </div>
+</div>
+<div id="templateData" data-message-id="{{ message_id }}"></div>
+<script>
+const messageId = document.getElementById('templateData').dataset.messageId;
+const storageKey = 'gptmail_api_key';
+const statusEl = document.getElementById('status');
+function getApiKey() { return localStorage.getItem(storageKey) || ''; }
+function setStatus(text) { statusEl.textContent = text || ''; }
+
+async function loadMessage() {
+    const key = getApiKey();
+    if (!key) {
+        setStatus('请先回首页保存 API Key。');
+        return;
+    }
+
+    const response = await fetch(`/api/email/${encodeURIComponent(messageId)}`, {
+        headers: { 'X-API-Key': key },
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.success) {
+        setStatus(payload.error || '加载失败');
+        return;
+    }
+
+    const mail = payload.data;
+    document.getElementById('subject').textContent = mail.subject || '(no subject)';
+    document.getElementById('meta').textContent = `${mail.from_address} · ${mail.created_at} · ${mail.email_address}`;
+    document.getElementById('textContent').textContent = mail.content || '';
+    document.getElementById('rawHeaders').textContent = mail.raw_headers || '';
+    document.getElementById('htmlFrame').srcdoc = mail.html_content || '<p style="font-family:sans-serif">(No HTML body)</p>';
+    setStatus(`已加载。今日已用 ${payload.usage.used_today} 次。`);
+}
+
+loadMessage();
+</script>
+</body>
+</html>

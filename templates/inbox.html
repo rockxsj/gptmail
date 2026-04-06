@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ email }} - Inbox</title>
+    <style>
+        :root { color-scheme: dark; }
+        body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0b1020; color: #e5e7eb; }
+        .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 20px 80px; }
+        .card { background: #121a31; border: 1px solid #24304f; border-radius: 16px; padding: 20px; margin-bottom: 20px; }
+        button { border-radius: 10px; border: 1px solid #334155; padding: 10px 14px; background: #2563eb; color: white; cursor: pointer; }
+        button.secondary { background: transparent; }
+        .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+        .status { min-height: 24px; color: #93c5fd; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { padding: 12px 10px; border-bottom: 1px solid #23314f; text-align: left; vertical-align: top; }
+        a { color: #93c5fd; }
+        code { background: #0f172a; padding: 2px 6px; border-radius: 6px; }
+        .muted { color: #94a3b8; }
+    </style>
+</head>
+<body>
+<div class="wrap">
+    <div class="card">
+        <div class="row" style="justify-content: space-between;">
+            <div>
+                <h1 style="margin: 0 0 8px 0;">{{ email }}</h1>
+                <div class="muted">收件箱会每 10 秒自动刷新。API Key 从浏览器 localStorage 读取。</div>
+            </div>
+            <div class="row">
+                <a href="/">返回首页</a>
+                <button class="secondary" id="copyBtn">复制邮箱</button>
+                <button id="refreshBtn">刷新</button>
+                <button id="clearBtn">清空收件箱</button>
+            </div>
+        </div>
+        <div id="status" class="status"></div>
+    </div>
+
+    <div class="card">
+        <table>
+            <thead>
+            <tr>
+                <th>主题</th>
+                <th>发件人</th>
+                <th>时间</th>
+                <th>大小</th>
+                <th></th>
+            </tr>
+            </thead>
+            <tbody id="mailRows">
+            <tr><td colspan="5" class="muted">加载中...</td></tr>
+            </tbody>
+        </table>
+    </div>
+</div>
+<div id="templateData" data-mailbox="{{ email }}"></div>
+<script>
+const mailbox = document.getElementById('templateData').dataset.mailbox;
+const storageKey = 'gptmail_api_key';
+const tbody = document.getElementById('mailRows');
+const statusEl = document.getElementById('status');
+
+function getApiKey() { return localStorage.getItem(storageKey) || ''; }
+function setStatus(text) { statusEl.textContent = text || ''; }
+function detailHref(id) { return '/' + encodeURIComponent(mailbox) + '/' + encodeURIComponent(id); }
+
+async function loadInbox() {
+    const key = getApiKey();
+    if (!key) {
+        tbody.innerHTML = '<tr><td colspan="5" class="muted">请先回首页保存 API Key。</td></tr>';
+        setStatus('缺少 API Key');
+        return;
+    }
+
+    const response = await fetch(`/api/emails?email=${encodeURIComponent(mailbox)}`, {
+        headers: { 'X-API-Key': key },
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.success) {
+        tbody.innerHTML = `<tr><td colspan="5" class="muted">${payload.error || '加载失败'}</td></tr>`;
+        setStatus(payload.error || '加载失败');
+        return;
+    }
+
+    const emails = payload.data.emails || [];
+    if (!emails.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="muted">暂时没有邮件。</td></tr>';
+        setStatus(`已刷新，今日已用 ${payload.usage.used_today} 次。`);
+        return;
+    }
+
+    tbody.innerHTML = emails.map(mail => `
+        <tr>
+            <td><a href="${detailHref(mail.id)}">${escapeHtml(mail.subject || '(no subject)')}</a></td>
+            <td>${escapeHtml(mail.from_address)}</td>
+            <td>${escapeHtml(mail.created_at)}</td>
+            <td>${mail.raw_size} B</td>
+            <td><button class="secondary" onclick="deleteMail('${mail.id}')">删除</button></td>
+        </tr>
+    `).join('');
+    setStatus(`已刷新，共 ${payload.data.count} 封邮件。今日已用 ${payload.usage.used_today} 次。`);
+}
+
+async function deleteMail(id) {
+    const key = getApiKey();
+    const response = await fetch(`/api/email/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: { 'X-API-Key': key },
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.success) {
+        setStatus(payload.error || '删除失败');
+        return;
+    }
+    setStatus(payload.data.message);
+    await loadInbox();
+}
+
+async function clearInbox() {
+    const key = getApiKey();
+    const response = await fetch(`/api/emails/clear?email=${encodeURIComponent(mailbox)}`, {
+        method: 'DELETE',
+        headers: { 'X-API-Key': key },
+    });
+    const payload = await response.json();
+    if (!response.ok || !payload.success) {
+        setStatus(payload.error || '清空失败');
+        return;
+    }
+    setStatus(payload.data.message);
+    await loadInbox();
+}
+
+function escapeHtml(value) {
+    return String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+document.getElementById('refreshBtn').addEventListener('click', loadInbox);
+document.getElementById('clearBtn').addEventListener('click', clearInbox);
+document.getElementById('copyBtn').addEventListener('click', async () => {
+    await navigator.clipboard.writeText(mailbox);
+    setStatus('邮箱已复制。');
+});
+
+loadInbox();
+window.setInterval(loadInbox, 10000);
+</script>
+</body>
+</html>

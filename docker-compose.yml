@@ -1,0 +1,21 @@
+services:
+  gptmail:
+    image: ${GPTMAIL_IMAGE:-rockxsj/gptmail:latest}
+    container_name: gptmail
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
+      HTTP_BIND: 0.0.0.0:3000
+      SMTP_BIND: 0.0.0.0:2525
+      SQLITE_PATH: /data/gptmail.sqlite3
+      RETENTION_DAYS: ${RETENTION_DAYS:-1}
+      DAILY_LIMIT: ${DAILY_LIMIT:-0}
+      TOTAL_LIMIT: ${TOTAL_LIMIT:-0}
+      RUST_LOG: ${RUST_LOG:-info,gptmail=debug}
+    ports:
+      - "${HTTP_PORT:-3000}:3000"
+      - "${SMTP_PORT:-25}:2525"
+    volumes:
+      - ./data:/data

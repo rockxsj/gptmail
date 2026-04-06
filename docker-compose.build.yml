@@ -1,0 +1,6 @@
+services:
+  gptmail:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ${GPTMAIL_IMAGE:-rockxsj/gptmail:latest}
