@@ -6,6 +6,7 @@
     <title>邮件详情</title>
     <style>
         :root { color-scheme: dark; }
+        * { box-sizing: border-box; }
         body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0b1020; color: #e5e7eb; }
         .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; }
         .card { background: #121a31; border: 1px solid #24304f; border-radius: 16px; padding: 20px; margin-bottom: 20px; }
@@ -14,12 +15,22 @@
         iframe { width: 100%; min-height: 320px; border: 1px solid #334155; border-radius: 12px; background: white; }
         .muted { color: #94a3b8; }
         .status { min-height: 24px; color: #93c5fd; }
+        .nav-row { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+        #subject { word-break: break-word; }
+        #meta { word-break: break-word; line-height: 1.5; }
+
+        @media (max-width: 768px) {
+            .wrap { padding: 16px 12px 60px; }
+            .card { padding: 16px; }
+            iframe { min-height: 240px; }
+            h1 { font-size: 22px; }
+        }
     </style>
 </head>
 <body>
 <div class="wrap">
     <div class="card">
-        <div><a href="/{{ email }}">← 返回收件箱</a></div>
+        <div class="nav-row"><a href="/{{ email }}">← 返回收件箱</a> <span>·</span> <a href="/all">查看全局收件箱</a></div>
         <h1 id="subject">加载中...</h1>
         <div class="muted" id="meta"></div>
         <div class="status" id="status"></div>
@@ -47,6 +58,12 @@ const storageKey = 'gptmail_api_key';
 const statusEl = document.getElementById('status');
 function getApiKey() { return localStorage.getItem(storageKey) || ''; }
 function setStatus(text) { statusEl.textContent = text || ''; }
+function formatLocalDate(isoString) {
+    const date = new Date(isoString);
+    if (Number.isNaN(date.getTime())) return isoString || '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
 
 async function loadMessage() {
     const key = getApiKey();
@@ -66,7 +83,7 @@ async function loadMessage() {
 
     const mail = payload.data;
     document.getElementById('subject').textContent = mail.subject || '(no subject)';
-    document.getElementById('meta').textContent = `${mail.from_address} · ${mail.created_at} · ${mail.email_address}`;
+    document.getElementById('meta').textContent = `${mail.from_address} · ${formatLocalDate(mail.created_at)} · ${mail.email_address}`;
     document.getElementById('textContent').textContent = mail.content || '';
     document.getElementById('rawHeaders').textContent = mail.raw_headers || '';
     document.getElementById('htmlFrame').srcdoc = mail.html_content || '<p style="font-family:sans-serif">(No HTML body)</p>';

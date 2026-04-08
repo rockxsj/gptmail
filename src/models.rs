@@ -37,6 +37,7 @@ pub struct EmailSummary {
     pub subject: String,
     pub timestamp: i64,
     pub created_at: String,
+    pub verification_code: Option<String>,
     pub has_html: bool,
     pub raw_size: i64,
 }
@@ -93,6 +94,12 @@ pub struct GenerateEmailRequest {
 #[derive(Debug, Clone, Deserialize)]
 pub struct EmailQuery {
     pub email: String,
+    pub api_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GlobalEmailsQuery {
+    pub recipient: Option<String>,
     pub api_key: Option<String>,
 }
 

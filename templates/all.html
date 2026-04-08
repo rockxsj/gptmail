@@ -3,24 +3,26 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>{{ email }} - Inbox</title>
+    <title>全局收件箱</title>
     <style>
         :root { color-scheme: dark; }
         * { box-sizing: border-box; }
         body { font-family: Inter, system-ui, sans-serif; margin: 0; background: #0b1020; color: #e5e7eb; }
-        .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 20px 80px; }
+        .wrap { max-width: 1240px; margin: 0 auto; padding: 24px 20px 80px; }
         .card { background: #121a31; border: 1px solid #24304f; border-radius: 16px; padding: 20px; margin-bottom: 20px; }
-        button { border-radius: 10px; border: 1px solid #334155; padding: 10px 14px; background: #2563eb; color: white; cursor: pointer; }
-        button.secondary { background: transparent; }
         .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
-        .topbar { justify-content: space-between; }
+        .toolbar { display: grid; grid-template-columns: minmax(260px, 1fr) auto auto; gap: 12px; }
+        input, button { border-radius: 10px; border: 1px solid #334155; padding: 10px 14px; }
+        input { background: #0f172a; color: #fff; }
+        button { background: #2563eb; color: white; cursor: pointer; }
+        button.secondary { background: transparent; }
         .status { min-height: 24px; color: #93c5fd; }
+        .muted { color: #94a3b8; }
+        a { color: #93c5fd; }
+        code { background: #0f172a; padding: 2px 6px; border-radius: 6px; }
         .table-wrap { overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; }
         th, td { padding: 12px 10px; border-bottom: 1px solid #23314f; text-align: left; vertical-align: top; }
-        a { color: #93c5fd; }
-        code { background: #0f172a; padding: 2px 6px; border-radius: 6px; }
-        .muted { color: #94a3b8; }
         .mobile-list { display: none; }
         .mail-card { display: grid; gap: 10px; padding: 16px 0; border-bottom: 1px solid #23314f; }
         .mail-card:last-child { border-bottom: 0; }
@@ -35,7 +37,7 @@
         @media (max-width: 768px) {
             .wrap { padding: 16px 12px 60px; }
             .card { padding: 16px; }
-            .topbar { align-items: flex-start; }
+            .toolbar { grid-template-columns: 1fr; }
             .desktop-table { display: none; }
             .mobile-list { display: block; }
             h1 { font-size: 22px; }
@@ -45,18 +47,20 @@
 <body>
 <div class="wrap">
     <div class="card">
-        <div class="row topbar">
+        <div class="row" style="justify-content: space-between;">
             <div>
-                <h1 style="margin: 0 0 8px 0; word-break: break-word;">{{ email }}</h1>
-                <div class="muted">收件箱会每 10 秒自动刷新。API Key 从浏览器 localStorage 读取。</div>
+                <h1 style="margin: 0 0 8px 0;">全局收件箱</h1>
+                <div class="muted">显示整个 <code>{{ mail_domain }}</code> catch-all 域下最近 20 封邮件，支持按收件邮箱筛选。</div>
             </div>
             <div class="row">
                 <a href="/">返回首页</a>
-                <a href="/all">查看全局收件箱</a>
-                <button class="secondary" id="copyBtn">复制邮箱</button>
                 <button id="refreshBtn">刷新</button>
-                <button id="clearBtn">清空收件箱</button>
             </div>
+        </div>
+        <div class="toolbar" style="margin-top: 16px;">
+            <input id="recipientFilter" placeholder="按收件邮箱筛选，例如 alpha@ 或 user@{{ mail_domain }}">
+            <button id="applyFilterBtn">应用筛选</button>
+            <button class="secondary" id="clearFilterBtn">清除筛选</button>
         </div>
         <div id="status" class="status"></div>
     </div>
@@ -68,13 +72,14 @@
                 <tr>
                     <th>主题</th>
                     <th>发件人</th>
+                    <th>收件邮箱</th>
                     <th>时间</th>
                     <th>验证码</th>
                     <th></th>
                 </tr>
                 </thead>
                 <tbody id="mailRows">
-                <tr><td colspan="5" class="muted">加载中...</td></tr>
+                <tr><td colspan="6" class="muted">加载中...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -86,17 +91,17 @@
         </div>
     </div>
 </div>
-<div id="templateData" data-mailbox="{{ email }}"></div>
+<div id="templateData" data-domain="{{ mail_domain }}"></div>
 <script>
-const mailbox = document.getElementById('templateData').dataset.mailbox;
 const storageKey = 'gptmail_api_key';
 const tbody = document.getElementById('mailRows');
 const cards = document.getElementById('mailCards');
 const statusEl = document.getElementById('status');
+const filterInput = document.getElementById('recipientFilter');
 
 function getApiKey() { return localStorage.getItem(storageKey) || ''; }
 function setStatus(text) { statusEl.textContent = text || ''; }
-function detailHref(id) { return '/' + encodeURIComponent(mailbox) + '/' + encodeURIComponent(id); }
+function detailHref(email, id) { return '/' + encodeURIComponent(email) + '/' + encodeURIComponent(id); }
 function escapeHtml(value) {
     return String(value)
         .replaceAll('&', '&amp;')
@@ -111,34 +116,34 @@ function formatLocalDate(isoString) {
     const pad = (n) => String(n).padStart(2, '0');
     return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
 }
+function currentRecipientFilter() { return filterInput.value.trim(); }
 async function copyVerificationCode(code) {
     await navigator.clipboard.writeText(code);
     setStatus(`验证码 ${code} 已复制。`);
 }
-
 function renderCodeCell(mail) {
     if (!mail.verification_code) return '<span class="muted">—</span>';
     return `<span class="code-pill"><code>${escapeHtml(mail.verification_code)}</code><button class="secondary small-btn" onclick="copyVerificationCode('${mail.verification_code}')">复制验证码</button></span>`;
 }
-
 function renderDesktopRows(emails) {
     tbody.innerHTML = emails.map(mail => `
         <tr>
-            <td><a href="${detailHref(mail.id)}">${escapeHtml(mail.subject || '(no subject)')}</a></td>
+            <td><a href="${detailHref(mail.email_address, mail.id)}">${escapeHtml(mail.subject || '(no subject)')}</a></td>
             <td>${escapeHtml(mail.from_address)}</td>
+            <td><a href="/${encodeURIComponent(mail.email_address)}">${escapeHtml(mail.email_address)}</a></td>
             <td title="${escapeHtml(mail.created_at)}">${escapeHtml(formatLocalDate(mail.created_at))}</td>
             <td>${renderCodeCell(mail)}</td>
             <td><button class="secondary small-btn" onclick="deleteMail('${mail.id}')">删除</button></td>
         </tr>
     `).join('');
 }
-
 function renderMobileCards(emails) {
     cards.innerHTML = emails.map(mail => `
         <article class="mail-card">
-            <a class="mail-card-title" href="${detailHref(mail.id)}">${escapeHtml(mail.subject || '(no subject)')}</a>
+            <a class="mail-card-title" href="${detailHref(mail.email_address, mail.id)}">${escapeHtml(mail.subject || '(no subject)')}</a>
             <div class="meta-grid">
                 <div class="meta-line"><span class="meta-label">发件人</span><span>${escapeHtml(mail.from_address)}</span></div>
+                <div class="meta-line"><span class="meta-label">收件箱</span><a href="/${encodeURIComponent(mail.email_address)}">${escapeHtml(mail.email_address)}</a></div>
                 <div class="meta-line"><span class="meta-label">时间</span><span title="${escapeHtml(mail.created_at)}">${escapeHtml(formatLocalDate(mail.created_at))}</span></div>
                 ${mail.verification_code ? `<div class="meta-line"><span class="meta-label">验证码</span><span class="code-pill"><code>${escapeHtml(mail.verification_code)}</code><button class="secondary small-btn" onclick="copyVerificationCode('${mail.verification_code}')">复制验证码</button></span></div>` : ''}
             </div>
@@ -149,22 +154,23 @@ function renderMobileCards(emails) {
     `).join('');
 }
 
-async function loadInbox() {
+async function loadAllInbox() {
     const key = getApiKey();
     if (!key) {
-        const empty = '<tr><td colspan="5" class="muted">请先回首页保存 API Key。</td></tr>';
-        tbody.innerHTML = empty;
+        tbody.innerHTML = '<tr><td colspan="6" class="muted">请先回首页保存 API Key。</td></tr>';
         cards.innerHTML = '<div class="muted">请先回首页保存 API Key。</div>';
         setStatus('缺少 API Key');
         return;
     }
 
-    const response = await fetch(`/api/emails?email=${encodeURIComponent(mailbox)}`, {
+    const recipient = currentRecipientFilter();
+    const query = recipient ? `?recipient=${encodeURIComponent(recipient)}` : '';
+    const response = await fetch(`/api/all-emails${query}`, {
         headers: { 'X-API-Key': key },
     });
     const payload = await response.json();
     if (!response.ok || !payload.success) {
-        tbody.innerHTML = `<tr><td colspan="5" class="muted">${payload.error || '加载失败'}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="6" class="muted">${payload.error || '加载失败'}</td></tr>`;
         cards.innerHTML = `<div class="muted">${payload.error || '加载失败'}</div>`;
         setStatus(payload.error || '加载失败');
         return;
@@ -172,15 +178,15 @@ async function loadInbox() {
 
     const emails = payload.data.emails || [];
     if (!emails.length) {
-        tbody.innerHTML = '<tr><td colspan="5" class="muted">暂时没有邮件。</td></tr>';
-        cards.innerHTML = '<div class="muted">暂时没有邮件。</div>';
-        setStatus(`已刷新，今日已用 ${payload.usage.used_today} 次。`);
+        tbody.innerHTML = '<tr><td colspan="6" class="muted">没有匹配的邮件。</td></tr>';
+        cards.innerHTML = '<div class="muted">没有匹配的邮件。</div>';
+        setStatus(`已刷新，当前显示最近 20 封中的匹配结果。今日已用 ${payload.usage.used_today} 次。`);
         return;
     }
 
     renderDesktopRows(emails);
     renderMobileCards(emails);
-    setStatus(`已刷新，共 ${payload.data.count} 封邮件。今日已用 ${payload.usage.used_today} 次。`);
+    setStatus(`已刷新，显示 ${payload.data.count} 封邮件（最多最近 20 封）。今日已用 ${payload.usage.used_today} 次。`);
 }
 
 async function deleteMail(id) {
@@ -195,33 +201,24 @@ async function deleteMail(id) {
         return;
     }
     setStatus(payload.data.message);
-    await loadInbox();
+    await loadAllInbox();
 }
 
-async function clearInbox() {
-    const key = getApiKey();
-    const response = await fetch(`/api/emails/clear?email=${encodeURIComponent(mailbox)}`, {
-        method: 'DELETE',
-        headers: { 'X-API-Key': key },
-    });
-    const payload = await response.json();
-    if (!response.ok || !payload.success) {
-        setStatus(payload.error || '清空失败');
-        return;
+document.getElementById('refreshBtn').addEventListener('click', loadAllInbox);
+document.getElementById('applyFilterBtn').addEventListener('click', loadAllInbox);
+document.getElementById('clearFilterBtn').addEventListener('click', async () => {
+    filterInput.value = '';
+    await loadAllInbox();
+});
+filterInput.addEventListener('keydown', async (event) => {
+    if (event.key === 'Enter') {
+        event.preventDefault();
+        await loadAllInbox();
     }
-    setStatus(payload.data.message);
-    await loadInbox();
-}
-
-document.getElementById('refreshBtn').addEventListener('click', loadInbox);
-document.getElementById('clearBtn').addEventListener('click', clearInbox);
-document.getElementById('copyBtn').addEventListener('click', async () => {
-    await navigator.clipboard.writeText(mailbox);
-    setStatus('邮箱已复制。');
 });
 
-loadInbox();
-window.setInterval(loadInbox, 10000);
+loadAllInbox();
+window.setInterval(loadAllInbox, 10000);
 </script>
 </body>
 </html>

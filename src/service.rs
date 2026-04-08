@@ -139,7 +139,7 @@ impl MailService {
 
         let rows = sqlx::query(
             r#"
-            SELECT id, email_address, from_address, subject, timestamp, created_at, has_html, raw_size
+            SELECT id, email_address, from_address, subject, text_content, timestamp, created_at, has_html, raw_size
             FROM messages
             WHERE email_address = ?
             ORDER BY timestamp DESC, id DESC
@@ -159,6 +159,69 @@ impl MailService {
                 subject: row.get::<String, _>("subject"),
                 timestamp: row.get::<i64, _>("timestamp"),
                 created_at: row.get::<String, _>("created_at"),
+                verification_code: extract_verification_code(
+                    &row.get::<String, _>("subject"),
+                    &row.get::<String, _>("text_content"),
+                ),
+                has_html: row.get::<i64, _>("has_html") != 0,
+                raw_size: row.get::<i64, _>("raw_size"),
+            })
+            .collect::<Vec<_>>();
+
+        Ok(EmailsListData {
+            count: emails.len(),
+            emails,
+        })
+    }
+
+    pub async fn list_all_messages(&self, recipient: Option<&str>) -> AppResult<EmailsListData> {
+        let recipient = recipient
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_ascii_lowercase());
+
+        let rows = if let Some(recipient_filter) = recipient {
+            let pattern = format!("%{recipient_filter}%");
+            sqlx::query(
+                r#"
+                SELECT id, email_address, from_address, subject, text_content, timestamp, created_at, has_html, raw_size
+                FROM messages
+                WHERE LOWER(email_address) LIKE ?
+                ORDER BY timestamp DESC, id DESC
+                LIMIT 20
+                "#,
+            )
+            .bind(pattern)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(anyhow::Error::from)?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT id, email_address, from_address, subject, text_content, timestamp, created_at, has_html, raw_size
+                FROM messages
+                ORDER BY timestamp DESC, id DESC
+                LIMIT 20
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await
+            .map_err(anyhow::Error::from)?
+        };
+
+        let emails = rows
+            .into_iter()
+            .map(|row| EmailSummary {
+                id: row.get::<String, _>("id"),
+                email_address: row.get::<String, _>("email_address"),
+                from_address: row.get::<String, _>("from_address"),
+                subject: row.get::<String, _>("subject"),
+                timestamp: row.get::<i64, _>("timestamp"),
+                created_at: row.get::<String, _>("created_at"),
+                verification_code: extract_verification_code(
+                    &row.get::<String, _>("subject"),
+                    &row.get::<String, _>("text_content"),
+                ),
                 has_html: row.get::<i64, _>("has_html") != 0,
                 raw_size: row.get::<i64, _>("raw_size"),
             })
@@ -575,6 +638,32 @@ fn start_of_today_utc() -> i64 {
     .timestamp()
 }
 
+fn extract_verification_code(subject: &str, content: &str) -> Option<String> {
+    find_six_digit_code(subject).or_else(|| find_six_digit_code(content))
+}
+
+fn find_six_digit_code(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        if bytes[index].is_ascii_digit() {
+            let start = index;
+            while index < bytes.len() && bytes[index].is_ascii_digit() {
+                index += 1;
+            }
+
+            if index - start == 6 {
+                return Some(input[start..index].to_string());
+            }
+        } else {
+            index += 1;
+        }
+    }
+
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -618,9 +707,74 @@ mod tests {
         let list = service.list_messages(&generated.email).await.unwrap();
         assert_eq!(list.count, 1);
         assert_eq!(list.emails[0].subject, "Test code");
+        assert_eq!(list.emails[0].verification_code.as_deref(), Some("654321"));
 
         let detail = service.get_message(&ids[0]).await.unwrap();
         assert_eq!(detail.email_address, generated.email);
         assert!(detail.content.contains("654321"));
+    }
+
+    #[tokio::test]
+    async fn lists_recent_global_messages_with_filter() {
+        let config = test_config();
+        let pool = db::connect(&config).await.unwrap();
+        let service = MailService::new(config, pool);
+
+        for idx in 0..25 {
+            let email = if idx % 2 == 0 {
+                "alpha@example.com"
+            } else {
+                "beta@example.com"
+            };
+            let raw = format!(
+                "From: Sender <sender@example.net>\r\nMessage-ID: <msg-{idx}@example.net>\r\nSubject: Test {idx}\r\n\r\nbody\r\n"
+            );
+            let inserted = service
+                .ingest_message(
+                    Some("sender@example.net"),
+                    &[email.to_string()],
+                    raw.as_bytes(),
+                )
+                .await
+                .unwrap();
+            sqlx::query("UPDATE messages SET timestamp = ?, created_at = ? WHERE id = ?")
+                .bind(i64::from(idx))
+                .bind(format!("2024-01-01T00:00:{idx:02}Z"))
+                .bind(&inserted[0])
+                .execute(service.pool())
+                .await
+                .unwrap();
+        }
+
+        let global = service.list_all_messages(None).await.unwrap();
+        assert_eq!(global.count, 20);
+        assert_eq!(global.emails[0].subject, "Test 24");
+        assert_eq!(global.emails[19].subject, "Test 5");
+
+        let filtered = service.list_all_messages(Some("alpha@")).await.unwrap();
+        assert!(filtered.count <= 20);
+        assert!(!filtered.emails.is_empty());
+        assert!(
+            filtered
+                .emails
+                .iter()
+                .all(|email| email.email_address == "alpha@example.com")
+        );
+    }
+
+    #[test]
+    fn extracts_verification_code_from_subject_then_body() {
+        assert_eq!(
+            extract_verification_code("Your code is 123456", "body 999999"),
+            Some("123456".to_string())
+        );
+        assert_eq!(
+            extract_verification_code("No code here", "Use 654321 to sign in"),
+            Some("654321".to_string())
+        );
+        assert_eq!(
+            extract_verification_code("Ref 12345", "Ticket 12345678"),
+            None
+        );
     }
 }

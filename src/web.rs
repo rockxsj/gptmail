@@ -1,5 +1,7 @@
 use crate::error::{AppError, AppResult};
-use crate::models::{ApiEnvelope, ApiKeyQuery, EmailQuery, GenerateEmailRequest, UsageSnapshot};
+use crate::models::{
+    ApiEnvelope, ApiKeyQuery, EmailQuery, GenerateEmailRequest, GlobalEmailsQuery, UsageSnapshot,
+};
 use crate::service::MailService;
 use askama::Template;
 use axum::extract::{Json, Path, Query, State};
@@ -14,11 +16,13 @@ use tracing::error;
 pub fn router(service: MailService) -> Router {
     Router::new()
         .route("/", get(index_page))
+        .route("/all", get(all_inbox_page))
         .route("/favicon.ico", get(favicon))
         .route(
             "/api/generate-email",
             get(generate_email_get).post(generate_email_post),
         )
+        .route("/api/all-emails", get(list_all_emails))
         .route("/api/emails", get(list_emails))
         .route("/api/email/{id}", get(get_email).delete(delete_email))
         .route("/api/emails/clear", delete(clear_inbox))
@@ -42,6 +46,12 @@ struct InboxTemplate<'a> {
 }
 
 #[derive(Template)]
+#[template(path = "all.html")]
+struct AllInboxTemplate<'a> {
+    mail_domain: &'a str,
+}
+
+#[derive(Template)]
 #[template(path = "message.html")]
 struct MessageTemplate<'a> {
     email: &'a str,
@@ -54,6 +64,12 @@ async fn favicon() -> StatusCode {
 
 async fn index_page(State(service): State<MailService>) -> Response {
     page_result(render_template(IndexTemplate {
+        mail_domain: &service.config().mail_domain,
+    }))
+}
+
+async fn all_inbox_page(State(service): State<MailService>) -> Response {
+    page_result(render_template(AllInboxTemplate {
         mail_domain: &service.config().mail_domain,
     }))
 }
@@ -107,6 +123,24 @@ async fn generate_email_post(
             .await?;
         let data = service
             .generate_email(payload.prefix.as_deref(), payload.domain.as_deref())
+            .await?;
+        Ok(success_json(data, usage))
+    })
+    .await
+}
+
+#[debug_handler]
+async fn list_all_emails(
+    State(service): State<MailService>,
+    headers: HeaderMap,
+    Query(query): Query<GlobalEmailsQuery>,
+) -> Response {
+    api_result(async move {
+        let usage = service
+            .authorize_and_track(resolve_api_key(&headers, query.api_key.as_deref()))
+            .await?;
+        let data = service
+            .list_all_messages(query.recipient.as_deref())
             .await?;
         Ok(success_json(data, usage))
     })
@@ -348,5 +382,60 @@ mod tests {
             .unwrap();
         let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(payload["data"]["count"].as_u64().unwrap(), 1);
+        assert_eq!(
+            payload["data"]["emails"][0]["verification_code"]
+                .as_str()
+                .unwrap(),
+            "123456"
+        );
+    }
+
+    #[tokio::test]
+    async fn global_api_lists_recent_messages() {
+        let config = test_config();
+        let pool = db::connect(&config).await.unwrap();
+        let service = MailService::new(config, pool);
+        let app = router(service.clone());
+
+        service
+            .ingest_message(
+                Some("sender@example.net"),
+                &[
+                    "alpha@example.com".to_string(),
+                    "beta@example.com".to_string(),
+                ],
+                b"From: Sender <sender@example.net>\r\nSubject: Global list\r\n\r\n123456\r\n",
+            )
+            .await
+            .unwrap();
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/all-emails?recipient=alpha&api_key=test-key")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let payload: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(payload["data"]["count"].as_u64().unwrap(), 1);
+        assert_eq!(
+            payload["data"]["emails"][0]["email_address"]
+                .as_str()
+                .unwrap(),
+            "alpha@example.com"
+        );
+        assert_eq!(
+            payload["data"]["emails"][0]["verification_code"]
+                .as_str()
+                .unwrap(),
+            "123456"
+        );
     }
 }
